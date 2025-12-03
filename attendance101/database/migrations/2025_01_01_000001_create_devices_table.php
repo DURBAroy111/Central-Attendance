@@ -11,12 +11,12 @@ return new class extends Migration
         Schema::create('devices', function (Blueprint $table) {
             $table->id();
             $table->string('name');
-            $table->string('ip')->unique();
+            $table->string('ip_address')->unique(); 
             $table->unsignedInteger('port')->default(4370);
             $table->string('model')->nullable();
             $table->string('serial_number')->nullable();
             $table->string('firmware')->nullable();
-            $table->string('status')->default('offline'); // online/offline/unknown
+            $table->string('status')->default('offline'); 
             $table->timestamp('last_seen_at')->nullable();
             $table->unsignedInteger('push_port')->nullable();
             $table->unsignedInteger('sdk_port')->nullable();

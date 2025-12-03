@@ -12,7 +12,7 @@ class GetZKUsers extends Command
 
     public function handle()
     {
-        $ip = '192.168.1.237'; 
+        $ip = '192.168.1.8'; 
         $zk = new ZKTeco($ip);
 
         $this->info("Connecting to ZKTeco device at $ip ...");

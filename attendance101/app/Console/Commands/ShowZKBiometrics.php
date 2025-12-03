@@ -17,7 +17,7 @@ class ShowZKBiometrics extends Command
 
     public function handle()
     {
-        $ip   = '192.168.1.237'; // device IP
+        $ip   = '192.168.1.8'; // device IP
         $port = 4370;            
 
         $this->info("Connecting to ZKTeco iClock 9000 at {$ip}:{$port} ...");

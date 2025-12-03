@@ -14,12 +14,14 @@
           <div>
             <div class="font-semibold">{{ $device->name }}</div>
             <div class="text-sm text-slate-500">IP: {{ $device->ip_address }}</div>
-            <div class="text-sm text-slate-500 mt-1">Location: {{ $device->location ?? '—' }}</div>
+            <!-- <div class="text-sm text-slate-500 mt-1">Location: {{ $device->location ?? '—' }}</div> -->
           </div>
           <div class="text-right">
-            <div class="px-3 py-1 rounded-full text-xs font-medium {{ $device->status ? 'bg-green-50 text-green-800' : 'bg-red-50 text-red-800' }}">
-              {{ $device->status ? 'Online' : 'Offline' }}
-            </div>
+           <div class="px-3 py-1 rounded-full text-xs font-medium
+                      {{ $device->status === 'online' ? 'bg-green-50 text-green-800' : 'bg-red-50 text-red-800' }}">
+                    {{ $device->status === 'online' ? 'Online' : 'Offline' }}
+          </div>
+
             <div class="mt-2">
               
               <a href="{{ route('devices.show',$device) }}" class="text-indigo-600 hover:underline">Manage</a>

@@ -1,7 +1,5 @@
 <?php
 
-
-
 use App\Models\DeviceFingerprint;
 use Rats\Zkteco\Lib\ZKTeco;
 use Illuminate\Support\Facades\Route;
@@ -12,12 +10,17 @@ use App\Http\Controllers\AttendanceController;
 
 
 Route::get('/', function(){ return redirect('/devices'); });
-Route::resource('devices', DeviceController::class)->only(['index','create','store','show']);
+Route::resource('devices', DeviceController::class)->only(['index','create','store','show','edit', 'update', 'destroy']);
+Route::post('/devices/{device}/ping', [DeviceController::class, 'pingNow'])
+    ->name('devices.ping');
 Route::resource('users', UserController::class)->only(['index','create','store','show']);
 Route::get('logs', [AttendanceController::class,'index']);
 
+Route::get('/devices/{device}/debug-push', [DeviceController::class, 'debugPush'])->name('devices.debug-push');
 
-$device_ip = '192.168.1.237'; 
+
+$device_ip = '192.168.1.8'; 
+//ping 192.168.1.8
 
 // Pull all attendance logs from device
 Route::get('/device/pull-logs', function () use ($device_ip) {
@@ -45,7 +48,9 @@ Route::get('/device/pull-users', function () use ($device_ip) {
 
 Route::get('/device/fingerprints', function () {
 
-    $device_ip = '192.168.1.237';
+    set_time_limit(3000);
+
+    $device_ip = '192.168.1.8';
     $port = 4370;
 
 

@@ -15,6 +15,7 @@
             <th class="px-4 py-3 text-left">Name</th>
             <th class="px-4 py-3 text-left">Email</th>
             <th class="px-4 py-3 text-left">Role</th>
+            <th class="px-4 py-3 text-left">Mechine ID</th>
             <th class="px-4 py-3 text-left">Actions</th>
           </tr>
         </thead>
