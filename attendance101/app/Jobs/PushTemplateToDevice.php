@@ -20,8 +20,8 @@ class PushTemplateToDevice implements ShouldQueue
     public int $deviceFingerprintId;
 
     /**
-     * @param int 
-     * @param int 
+     * @param int $deviceId
+     * @param int $deviceFingerprintId
      */
     public function __construct(int $deviceId, int $deviceFingerprintId)
     {
@@ -29,7 +29,6 @@ class PushTemplateToDevice implements ShouldQueue
         $this->deviceFingerprintId = $deviceFingerprintId;
     }
 
-    
     public function handle(): void
     {
         $device = Device::find($this->deviceId);
@@ -60,7 +59,6 @@ class PushTemplateToDevice implements ShouldQueue
         $ok = $svc->push($df);
 
         if (! $ok) {
-            
             if ($this->attempts() < 2) {
                 Log::warning('PushTemplateToDevice failed, will retry', [
                     'device_ip' => $ip,
@@ -68,7 +66,7 @@ class PushTemplateToDevice implements ShouldQueue
                     'attempts'  => $this->attempts(),
                 ]);
 
-                $this->release(60); 
+                $this->release(60);
             } else {
                 Log::error('PushTemplateToDevice failed after retries', [
                     'device_ip' => $ip,

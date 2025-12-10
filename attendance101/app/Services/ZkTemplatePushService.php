@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Models\DeviceFingerprint;
 use CodingLibs\ZktecoPhp\Libs\ZKTeco;
+use CodingLibs\ZktecoPhp\Libs\Util;
 use Illuminate\Support\Facades\Log;
 
 class ZkTemplatePushService
@@ -36,8 +37,9 @@ class ZkTemplatePushService
             return true;
         } catch (\Throwable $e) {
             Log::warning('ZkTemplatePushService connect failed: '.$e->getMessage(), [
-                'ip'   => $this->ip,
-                'port' => $this->port,
+                'ip'        => $this->ip,
+                'port'      => $this->port,
+                'exception' => $e,
             ]);
 
             $this->client = null;
@@ -60,7 +62,7 @@ class ZkTemplatePushService
     }
 
     /**
-     * Push a single DeviceFingerprint to the device.
+     * Push a single DeviceFingerprint to the zkteco device.
      */
     public function push(DeviceFingerprint $df): bool
     {
@@ -72,6 +74,7 @@ class ZkTemplatePushService
         try {
             // Decide UID used on device
             $uid = (int) ($df->device_uid ?: $df->user_code);
+
             if (! $uid) {
                 Log::warning('ZkTemplatePushService: missing UID for fingerprint', [
                     'df_id'     => $df->id,
@@ -81,6 +84,8 @@ class ZkTemplatePushService
                 return false;
             }
 
+            $userId   = (string) $df->user_code;
+            $userName = $df->user_name ?: $userId;
             $fingerIndex = (int) ($df->finger_index ?? 0);
 
             // Use accessor from DeviceFingerprint: template_binary
@@ -94,14 +99,67 @@ class ZkTemplatePushService
                 return false;
             }
 
-            // ZKTecoPhp expects [fingerIndex => binaryTemplate]
+            // 1️⃣ Ensure user exists on the device
+            try {
+                /**
+                 * Signature (from coding-libs/zkteco-php):
+                 * setUser(int $uid, $userid, string $name, $password, int $role = Util::LEVEL_USER, int $cardno = 0): bool
+                 */
+                $userOk = $this->client->setUser(
+                    $uid,
+                    $userId,
+                    $userName,
+                    '',                 // password
+                    Util::LEVEL_USER,   // role (integer)
+                    0                   // card number
+                );
+
+                Log::info('ZkTemplatePushService: setUser result', [
+                    'ip'        => $this->ip,
+                    'df_id'     => $df->id,
+                    'uid'       => $uid,
+                    'userId'    => $userId,
+                    'userName'  => $userName,
+                    'userOk'    => $userOk ? 1 : 0,
+                ]);
+            } catch (\Throwable $e) {
+                Log::warning('ZkTemplatePushService: setUser exception', [
+                    'ip'      => $this->ip,
+                    'df_id'   => $df->id,
+                    'uid'     => $uid,
+                    'message' => $e->getMessage(),
+                ]);
+                // we still try fingerprint, but this is a red flag
+            }
+
+            // 2️⃣ Now push fingerprint
             $payload = [
                 $fingerIndex => $binaryTemplate,
             ];
 
-            $count = $this->client->setFingerprint($uid, $payload);
+            Log::info('ZkTemplatePushService: calling setFingerprint', [
+                'ip'          => $this->ip,
+                'df_id'       => $df->id,
+                'uid'         => $uid,
+                'user_code'   => $userId,
+                'user_name'   => $userName,
+                'fingerIndex' => $fingerIndex,
+                'tpl_length'  => strlen($binaryTemplate),
+                'template_type' => $df->template_type,
+            ]);
 
-            if ($count > 0) {
+            // According to the library, this normally returns bool
+            $result = $this->client->setFingerprint($uid, $payload);
+
+            Log::info('ZkTemplatePushService: setFingerprint raw result', [
+                'ip'      => $this->ip,
+                'df_id'   => $df->id,
+                'uid'     => $uid,
+                'result'  => $result,
+                'as_int'  => (int) $result,
+            ]);
+
+            if ($result) {
                 Log::info('ZkTemplatePushService: template pushed', [
                     'ip'          => $this->ip,
                     'df_id'       => $df->id,
@@ -112,11 +170,14 @@ class ZkTemplatePushService
                 return true;
             }
 
-            Log::warning('ZkTemplatePushService: setFingerprint returned 0', [
+            Log::warning('ZkTemplatePushService: setFingerprint failed / returned falsy', [
                 'ip'          => $this->ip,
                 'df_id'       => $df->id,
                 'uid'         => $uid,
                 'fingerIndex' => $fingerIndex,
+                'tpl_length'  => strlen($binaryTemplate),
+                'template_type' => $df->template_type,
+                'device_ip'   => $df->device_ip,
             ]);
 
             return false;
@@ -125,6 +186,7 @@ class ZkTemplatePushService
                 'ip'      => $this->ip,
                 'df_id'   => $df->id,
                 'user_id' => $df->user_code,
+                'exception' => $e,
             ]);
 
             return false;

@@ -50,7 +50,7 @@ Route::get('/device/fingerprints', function () {
 
     set_time_limit(3000);
 
-    $device_ip = '192.168.1.8';
+    $device_ip = '192.168.1.109';
     $port = 4370;
 
 

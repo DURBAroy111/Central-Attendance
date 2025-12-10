@@ -10,9 +10,7 @@ use Rats\Zkteco\Lib\ZKTeco;
 use App\Services\ZkTemplatePullService;
 use App\Models\Fingerprint;
 use App\Jobs\PushTemplateToDevice;
-use App\Services\ZkDeviceService; 
-
-
+use App\Services\ZkDeviceService;
 
 class DeviceController extends Controller
 {
@@ -28,46 +26,46 @@ class DeviceController extends Controller
     }
 
     public function store(Request $request)
-{
-    $data = $request->validate([
-        'name'          => 'required|string',
-        'ip_address'    => 'required|ip',
-        'port'          => 'nullable|integer',
-        'serial_number' => 'nullable|string',
-    ]);
+    {
+        $data = $request->validate([
+            'name'          => 'required|string',
+            'ip_address'    => 'required|ip',
+            'port'          => 'nullable|integer',
+            'serial_number' => 'nullable|string',
+        ]);
 
-    $data['port'] = $data['port'] ?? 4370;
+        $data['port'] = $data['port'] ?? 4370;
 
-   
-    $isOnline = Device::ping($data['ip_address'], (int) $data['port']);
+        // Check device online/offline
+        $isOnline = Device::ping($data['ip_address'], (int) $data['port']);
 
-    $data['status']       = $isOnline ? 'online' : 'offline';
-    $data['last_seen_at'] = $isOnline ? now() : null;
+        $data['status']       = $isOnline ? 'online' : 'offline';
+        $data['last_seen_at'] = $isOnline ? now() : null;
 
+        // Create device
+        $device = Device::create($data);
 
-    $device = Device::create($data);
+        $pullCount  = 0;
+        $pushQueued = 0;
 
-    $pullCount  = 0;
-    $pushQueued = 0;
+        if ($isOnline) {
+            // Pull existing templates from this device
+            $pullCount = $this->syncFingerprintsFromDevice($device);
 
-    if ($isOnline) {
-        
-        $pullCount = $this->syncFingerprintsFromDevice($device);
+            // Queue push of missing templates from DB -> this device
+            $pushQueued = $this->queuePushAllFingerprintsToDevice($device);
+        }
 
-        
-        $pushQueued = $this->queuePushAllFingerprintsToDevice($device);
+        return redirect()
+            ->route('devices.index')
+            ->with(
+                'success',
+                'Device created and status checked as ' . ($isOnline ? 'ONLINE' : 'OFFLINE') .
+                ($isOnline
+                    ? ". Pulled {$pullCount} fingerprints from device and queued {$pushQueued} pushes to device."
+                    : '.')
+            );
     }
-
-    return redirect()
-        ->route('devices.index')
-        ->with(
-            'success',
-            'Device created and status checked as ' . ($isOnline ? 'ONLINE' : 'OFFLINE') .
-            ($isOnline
-                ? ". Pulled {$pullCount} fingerprints from device and queued {$pushQueued} pushes to device."
-                : '.')
-        );
-}
 
     public function show(Device $device)
     {
@@ -90,13 +88,12 @@ class DeviceController extends Controller
 
         $data['port'] = $data['port'] ?? 4370;
 
-       
+        // Check device online/offline
         $isOnline = Device::ping($data['ip_address'], (int) $data['port']);
 
         $data['status']       = $isOnline ? 'online' : 'offline';
         $data['last_seen_at'] = $isOnline ? now() : null;
 
-       
         $device->update($data);
         $device->refresh();
 
@@ -128,7 +125,6 @@ class DeviceController extends Controller
             ->with('success', 'Device deleted.');
     }
 
-    
     public function pingNow(Device $device)
     {
         $ip   = $device->ip_address;
@@ -154,7 +150,9 @@ class DeviceController extends Controller
         );
     }
 
-    
+    /**
+     * Connect via Rats\Zkteco\Lib\ZKTeco (legacy/debug)
+     */
     protected function connectZk(Device $device): ?ZKTeco
     {
         $ip   = $device->ip_address;
@@ -182,7 +180,9 @@ class DeviceController extends Controller
         return $zk;
     }
 
-   
+    /**
+     * Pull all fingerprints from a device (using CodingLibs ZkTemplatePullService)
+     */
     protected function syncFingerprintsFromDevice(Device $device): int
     {
         $ip   = $device->ip_address;
@@ -230,45 +230,48 @@ class DeviceController extends Controller
         return $count;
     }
 
-protected function queuePushAllFingerprintsToDevice(Device $device): int
-{
-    $ip = $device->ip_address;
+    /**
+     * Queue push of all missing fingerprints from DB to this device.
+     */
+    protected function queuePushAllFingerprintsToDevice(Device $device): int
+    {
+        $ip = $device->ip_address;
 
-    if (! $ip) {
-        return 0;
-    }
+        if (! $ip) {
+            return 0;
+        }
 
-    
-    $existing = DeviceFingerprint::forDevice($ip)->get(['user_code', 'finger_index']);
+        // existing fingerprints already on THIS device (by user_code + finger_index)
+        $existing = DeviceFingerprint::forDevice($ip)->get(['user_code', 'finger_index']);
 
-    $existingMap = [];
-    foreach ($existing as $df) {
-        $key = (string) $df->user_code . ':' . (int) ($df->finger_index ?? 0);
-        $existingMap[$key] = true;
-    }
+        $existingMap = [];
+        foreach ($existing as $df) {
+            $key = (string) $df->user_code . ':' . (int) ($df->finger_index ?? 0);
+            $existingMap[$key] = true;
+        }
 
-    $queued   = 0;
-    $deviceId = $device->id;
+        $queued   = 0;
+        $deviceId = $device->id;
 
-    
-    DeviceFingerprint::whereNotNull('template_base64')
-        ->orderBy('id')
-        ->chunk(100, function ($rows) use (&$queued, &$existingMap, $deviceId) {
-            /** @var \App\Models\DeviceFingerprint $df */
-            foreach ($rows as $df) {
-                $key = (string) $df->user_code . ':' . (int) ($df->finger_index ?? 0);
+        // Any template in DB can be used as "source" to push to this device
+        DeviceFingerprint::whereNotNull('template_base64')
+            ->orderBy('id')
+            ->chunk(100, function ($rows) use (&$queued, &$existingMap, $deviceId) {
+                /** @var \App\Models\DeviceFingerprint $df */
+                foreach ($rows as $df) {
+                    $key = (string) $df->user_code . ':' . (int) ($df->finger_index ?? 0);
 
-                if (isset($existingMap[$key])) {
-                    continue;
+                    if (isset($existingMap[$key])) {
+                        continue;
+                    }
+
+                    PushTemplateToDevice::dispatch($deviceId, $df->id);
+                    $queued++;
+
+                    $existingMap[$key] = true;
                 }
+            });
 
-                PushTemplateToDevice::dispatch($deviceId, $df->id);
-                $queued++;
-
-                $existingMap[$key] = true;
-            }
-        });
-
-    return $queued;
-}
+        return $queued;
+    }
 }

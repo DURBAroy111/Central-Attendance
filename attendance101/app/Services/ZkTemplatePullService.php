@@ -4,6 +4,7 @@ namespace App\Services;
 
 use CodingLibs\ZktecoPhp\Libs\ZKTeco;
 use Illuminate\Support\Facades\Log;
+use App\Models\DeviceFingerprint;
 
 class ZkTemplatePullService
 {
@@ -34,8 +35,8 @@ class ZkTemplatePullService
             return true;
         } catch (\Throwable $e) {
             Log::error('ZkTemplatePullService connect failed: '.$e->getMessage(), [
-                'ip' => $this->ip,
-                'port' => $this->port,
+                'ip'        => $this->ip,
+                'port'      => $this->port,
                 'exception' => $e,
             ]);
             $this->client = null;
@@ -61,7 +62,18 @@ class ZkTemplatePullService
         $this->client = null;
     }
 
-    
+    /**
+     * Pull all fingerprints for all users from device.
+     *
+     * Returns array of:
+     *  [
+     *    'device_uid'   => int,
+     *    'user_code'    => string,
+     *    'user_name'    => ?string,
+     *    'finger_index' => int,
+     *    'template_raw' => string (binary)
+     *  ]
+     */
     public function pullAllFingerprints(): array
     {
         if (! $this->connect()) {
@@ -71,97 +83,128 @@ class ZkTemplatePullService
         $results = [];
 
         try {
-            $zk = $this->client;
-
-            // 1) Get all users
+            $zk    = $this->client;
             $users = $zk->getUsers() ?? [];
 
             foreach ($users as $user) {
-                // You may need to adjust these key names after a dd($users).
-                $uid       = (int) ($user['uid'] ?? $user['UID'] ?? 0);
-                $userCode  = (string) ($user['userid'] ?? $user['UserID'] ?? $uid);
-                $userName  = $user['name'] ?? $user['Name'] ?? null;
+                // common fields for CodingLibs SDK
+                $uid      = (int) ($user['uid'] ?? $user['UID'] ?? 0);
+                $userCode = (string) ($user['userid'] ?? $user['UserID'] ?? $uid);
+                $userName = $user['name'] ?? $user['Name'] ?? null;
 
                 if (! $uid) {
                     continue;
                 }
 
-                // 2) Get fingerprint(s) for this user
-                //    The exact shape of this result depends on the library/device.
                 $fpData = $zk->getFingerprint($uid);
 
-                // Case 1: multiple fingerprints as array of arrays
-                if (is_array($fpData) && isset($fpData[0]) && is_array($fpData[0])) {
-                    foreach ($fpData as $fp) {
-                        $fingerIndex = (int) ($fp['finger'] ?? $fp['FingerID'] ?? 0);
-
-                        // pick the template field or fallback to first scalar value
-                        $tplRaw = $fp['template']
-                            ?? $fp['Template']
-                            ?? $fp['data']
-                            ?? null;
-
-                        if ($tplRaw === null) {
-                            // try grab first scalar in the array
-                            foreach ($fp as $v) {
-                                if (is_string($v)) {
-                                    $tplRaw = $v;
-                                    break;
-                                }
-                            }
-                        }
-
-                        if ($tplRaw === null) {
-                            continue;
-                        }
-
-                        $results[] = [
-                            'device_uid'   => $uid,
-                            'user_code'    => $userCode,
-                            'user_name'    => $userName,
-                            'finger_index' => $fingerIndex,
-                            'template_raw' => $tplRaw,
-                        ];
-                    }
+                if (empty($fpData)) {
+                    continue;
                 }
-                // Case 2: single fingerprint (string or simple array)
-                else {
-                    $fingerIndex = 0;
 
-                    if (is_array($fpData)) {
-                        $fingerIndex = (int) ($fpData['finger'] ?? $fpData['FingerID'] ?? 0);
-                        $tplRaw      = $fpData['template']
-                            ?? $fpData['Template']
-                            ?? $fpData['data']
-                            ?? null;
+                $rows = [];
 
-                        if ($tplRaw === null) {
-                            foreach ($fpData as $v) {
-                                if (is_string($v)) {
-                                    $tplRaw = $v;
+                if (is_array($fpData)) {
+                    foreach ($fpData as $key => $val) {
+                        // Case A: value is array with fields inside
+                        if (is_array($val)) {
+                            $fingerIndex = null;
+
+                            // try to detect finger index from known keys
+                            foreach (['finger', 'FingerID', 'fid', 'fingerIndex'] as $idxKey) {
+                                if (isset($val[$idxKey])) {
+                                    $fingerIndex = (int) $val[$idxKey];
                                     break;
                                 }
                             }
-                        }
-                    } else {
-                        $tplRaw = $fpData; // assume string/binary
-                    }
 
-                    if ($tplRaw !== null) {
-                        $results[] = [
-                            'device_uid'   => $uid,
-                            'user_code'    => $userCode,
-                            'user_name'    => $userName,
-                            'finger_index' => $fingerIndex,
-                            'template_raw' => $tplRaw,
-                        ];
+                            // fallback: numeric array key
+                            if ($fingerIndex === null && is_numeric($key)) {
+                                $fingerIndex = (int) $key;
+                            }
+
+                            // extract template raw data
+                            $tplRaw = $val['template']
+                                ?? $val['Template']
+                                ?? $val['tpl']
+                                ?? $val['data']
+                                ?? null;
+
+                            if ($tplRaw === null) {
+                                foreach ($val as $v) {
+                                    if (is_string($v)) {
+                                        $tplRaw = $v;
+                                        break;
+                                    }
+                                }
+                            }
+
+                            if (! is_string($tplRaw) || $tplRaw === '') {
+                                continue;
+                            }
+
+                            $rows[] = [
+                                'finger_index' => $fingerIndex ?? 0,
+                                'template_raw' => $tplRaw,
+                            ];
+                        }
+
+                        // Case B: simple [fingerIndex => binaryTemplate]
+                        else {
+                            if (! is_string($val) || $val === '') {
+                                continue;
+                            }
+
+                            $fingerIndex = is_numeric($key) ? (int) $key : 0;
+
+                            $rows[] = [
+                                'finger_index' => $fingerIndex,
+                                'template_raw' => $val,
+                            ];
+                        }
                     }
+                } elseif (is_string($fpData) && $fpData !== '') {
+                    // Single template, assume finger 0
+                    $rows[] = [
+                        'finger_index' => 0,
+                        'template_raw' => $fpData,
+                    ];
+                }
+
+                foreach ($rows as $row) {
+                    $fingerIndex = (int) $row['finger_index'];
+                    $tplRaw      = $row['template_raw'];
+
+                    // Save directly to DB as base64
+                    $templateBase64 = base64_encode($tplRaw);
+
+                    DeviceFingerprint::updateOrCreate(
+                        [
+                            'device_ip'    => $this->ip,
+                            'device_uid'   => $uid,
+                            'finger_index' => $fingerIndex,
+                        ],
+                        [
+                            'user_code'       => $userCode,
+                            'user_name'       => $userName,
+                            'template_base64' => $templateBase64,
+                            'template_type'   => 'zk',
+                        ]
+                    );
+
+                    $results[] = [
+                        'device_uid'   => $uid,
+                        'user_code'    => $userCode,
+                        'user_name'    => $userName,
+                        'finger_index' => $fingerIndex,
+                        'template_raw' => $tplRaw,
+                    ];
                 }
             }
         } catch (\Throwable $e) {
             Log::error('ZkTemplatePullService pullAllFingerprints error: '.$e->getMessage(), [
-                'ip' => $this->ip,
-                'port' => $this->port,
+                'ip'        => $this->ip,
+                'port'      => $this->port,
                 'exception' => $e,
             ]);
         } finally {
